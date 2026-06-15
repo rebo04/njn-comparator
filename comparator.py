@@ -20,6 +20,8 @@ FONT_CHANGED  = Font(name="Century Gothic", size=11, color="5C4000")
 FONT_ADDED    = Font(name="Century Gothic", size=11, bold=True, color="1A5C3C")
 FONT_REMOVED  = Font(name="Century Gothic", size=11, bold=True, color="7B001A", strike=True)
 
+AUTHOR = "Arturo Rebolledo"
+
 FILL_LEGEND_TITLE = PatternFill("solid", fgColor="2E4057")  # dark navy
 FILL_LEGEND_CHG   = PatternFill("solid", fgColor="FFF3B0")
 FILL_LEGEND_ADD   = PatternFill("solid", fgColor="B5EAD7")
@@ -60,9 +62,9 @@ def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
     ws.row_dimensions[r].height = 28
     r += 1
 
-    # Timestamp
+    # Timestamp + author
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=end_col)
-    s = ws.cell(r, 1, f"  NJN Comparator  ·  {datetime.now().strftime('%Y-%m-%d  %H:%M')}")
+    s = ws.cell(r, 1, f"  NJN Comparator  ·  {datetime.now().strftime('%Y-%m-%d  %H:%M')}  ·  Compared by: {AUTHOR}")
     s.fill = PatternFill("solid", fgColor="3D5A73")
     s.font = Font(name="Century Gothic", size=9, color="FFFFFF")
     s.alignment = Alignment(horizontal="left", vertical="center")
@@ -288,7 +290,7 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                     cell.font = FONT_CHANGED
                     try:
                         cell.comment = Comment(
-                            f"PREVIOUS ({label_a}):\n{va or '(empty)'}",
+                            f"PREVIOUS ({label_a}):\n{va or '(empty)'}\n\n— {AUTHOR}",
                             "NJN Comparator", height=60, width=200
                         )
                     except Exception:

@@ -48,7 +48,7 @@ class NJNComparatorApp(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("NJN Comparator")
+        self.title("NJN Comparator — Arturo Rebolledo")
         self.geometry("700x640")
         self.minsize(620, 520)
         self._files = []          # list of (path, FileRow widget)
@@ -77,6 +77,11 @@ class NJNComparatorApp(ctk.CTk):
             bar, text="Compare PPAP NJN documents and highlight every change",
             font=ctk.CTkFont(size=11), text_color="#8899BB"
         ).grid(row=0, column=1, padx=4, sticky="w")
+
+        ctk.CTkLabel(
+            bar, text="Arturo Rebolledo",
+            font=ctk.CTkFont(size=11, weight="bold"), text_color="#AACCFF"
+        ).grid(row=0, column=2, padx=20, pady=10, sticky="e")
 
         # ── Scrollable body ──────────────────────────────────────────────────
         body = ctk.CTkScrollableFrame(self, corner_radius=0)
