@@ -323,15 +323,12 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
 
 
 def rev_label(path):
-    name  = os.path.basename(path).replace(".xlsx", "")
-    parts = name.split(" - ")
-    # Short slug for the output filename (first 1-2 segments, sanitized)
-    if len(parts) >= 2:
-        slug = f"{parts[0].strip()}_{parts[1].strip()}"
-    else:
-        slug = name
-    slug = re.sub(r'[^\w\-]', '_', slug)
-    # Full original filename as the display label everywhere (legend, comments)
+    name = os.path.basename(path).replace(".xlsx", "")
+    # Sanitize full name for filesystem use — no assumptions about format
+    slug = re.sub(r'\s*-\s*', '-', name)   # "x - y" -> "x-y"
+    slug = slug.replace(' ', '_')
+    slug = re.sub(r'[^\w\-]', '', slug)
+    # Full original filename as the display label everywhere
     return slug, name
 
 
