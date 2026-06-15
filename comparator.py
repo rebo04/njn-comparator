@@ -74,12 +74,14 @@ def read_values(path):
                 key = (cell.row, cell.column)
                 val = cell.value
 
-                # Fix #2: formula cache miss → fall back to raw formula string
+                # Fix #2: formula cache miss → treat as empty for comparison.
+                # Using the raw formula string causes false "changed" flags when
+                # one file has a cache and the other does not.
                 if val is None:
                     raw_cell = ws_raw.cell(cell.row, cell.column)
                     raw_val  = raw_cell.value
                     if isinstance(raw_val, str) and raw_val.startswith("="):
-                        val = raw_val   # at least the formula is visible
+                        val = None  # unknown — compare as empty, not as formula text
 
                 str_vals[key] = fmt(val)
                 raw_vals[key] = val
@@ -438,8 +440,9 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                     cell.font = FONT_CHANGED
                     # Fix #7: systemic cells still get hover comments (correct behavior)
                     try:
+                        prev_display = "(formula — value not cached)" if (isinstance(va, str) and va.startswith("=")) else (va or "(empty)")
                         cell.comment = Comment(
-                            f"PREVIOUS ({label_a}):\n{va or '(empty)'}\n\n— {AUTHOR}",
+                            f"PREVIOUS ({label_a}):\n{prev_display}\n\n— {AUTHOR}",
                             "NJN Comparator", height=60, width=200
                         )
                     except Exception:
