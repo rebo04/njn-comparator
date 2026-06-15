@@ -2,6 +2,7 @@
 NJN PPAP Comparator — core logic (importable by app.py or run standalone).
 """
 
+import difflib
 import shutil, os, sys, glob
 from datetime import datetime, date
 import openpyxl
@@ -59,7 +60,7 @@ def add_legend(ws, start_row, label_a, label_b):
     for fill, color_name, desc in [
         (FILL_LEGEND_CHG,  "ORANGE", "Cell changed — hover the cell to see the previous value"),
         (FILL_LEGEND_ADD,  "GREEN",  "Row is NEW in this revision"),
-        (FILL_LEGEND_DEL,  "RED",    "Row was REMOVED (appended below)"),
+        (FILL_LEGEND_DEL,  "RED",    "Row was DELETED — shown in its original position"),
         (FILL_LEGEND_SAME, "—",      "No change"),
     ]:
         ws.row_dimensions[r].height = 18
@@ -82,70 +83,164 @@ def add_legend(ws, start_row, label_a, label_b):
             ).font = Font(name="Century Gothic", size=8, italic=True, color="888888")
 
 
+def _row_key(r, data):
+    """
+    Content-based key so difflib can align rows by meaning, not position.
+    Header rows (1-8) match by position; data rows by Part Number;
+    footer rows by their label in col A.
+    """
+    if r <= 8:
+        return f"__HDR_{r:03d}"
+    pn = (data.get(5) or "").strip()
+    if pn:
+        return f"PART|{pn}"
+    label = (data.get(1) or "").strip()
+    if label:
+        return f"FOOTER|{label}"
+    content = "|".join(str(v) for v in data.values() if v)
+    return f"CONTENT|{content}"
+
+
 def compare_and_export(path_a, path_b, out_path, label_a, label_b):
     """
-    Copy path_b to out_path, highlight every cell that differs from path_a.
+    Copy path_b to out_path and mark every difference vs path_a:
+      - Orange cell  : value changed (hover for previous value)
+      - Green row    : row is NEW in path_b
+      - Red row      : row was DELETED from path_a — inserted in-place, in order
+
+    Rows are matched by content (Part Number for data rows, label for footer
+    rows) using difflib, so the comparison is correct even when rows shift
+    position between revisions or documents have very different content.
+
     Returns (n_changed_cells, n_added_rows, n_removed_rows).
     """
     vals_a, _,     max_row_a, max_col_a = read_values(path_a)
     vals_b, raw_b, max_row_b, max_col_b = read_values(path_b)
-    max_row = max(max_row_a, max_row_b)
     max_col = max(max_col_a, max_col_b)
 
+    # ── Extract non-empty row sequences ──────────────────────────────────────
+    def get_rows(vals, max_row):
+        out = []
+        for r in range(1, max_row + 1):
+            data = {c: vals.get((r, c), "") for c in range(1, max_col + 1)}
+            if any(data.values()):
+                out.append((r, data))
+        return out
+
+    rows_a = get_rows(vals_a, max_row_a)
+    rows_b = get_rows(vals_b, max_row_b)
+
+    keys_a = [_row_key(r, d) for r, d in rows_a]
+    keys_b = [_row_key(r, d) for r, d in rows_b]
+
+    # ── Build ordered operation list via difflib ──────────────────────────────
+    # Each entry: ("same"|"added"|"changed"|"deleted", r_b_or_None, data_b_or_None, data_a_or_None)
+    sm = difflib.SequenceMatcher(None, keys_a, keys_b, autojunk=False)
+    ops = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for ia, ib in zip(range(i1, i2), range(j1, j2)):
+                ops.append(("same", rows_b[ib][0], rows_b[ib][1], rows_a[ia][1]))
+        elif tag == "insert":
+            for ib in range(j1, j2):
+                ops.append(("added", rows_b[ib][0], rows_b[ib][1], None))
+        elif tag == "delete":
+            for ia in range(i1, i2):
+                ops.append(("deleted", None, None, rows_a[ia][1]))
+        elif tag == "replace":
+            pairs = min(i2 - i1, j2 - j1)
+            for k in range(pairs):
+                ops.append(("changed",
+                             rows_b[j1 + k][0], rows_b[j1 + k][1],
+                             rows_a[i1 + k][1]))
+            for ia in range(i1 + pairs, i2):
+                ops.append(("deleted", None, None, rows_a[ia][1]))
+            for ib in range(j1 + pairs, j2):
+                ops.append(("added", rows_b[ib][0], rows_b[ib][1], None))
+
+    # ── Map: which deleted rows go BEFORE which B row ─────────────────────────
+    # insertions[b_row_num] = [data_a, ...] to insert before that B row
+    # trailing_dels: deleted rows that come after the last B row → append at end
+    insertions: dict = {}
+    trailing_dels: list = []
+    pending: list = []
+    for kind, r_b, data_b, data_a in ops:
+        if kind == "deleted":
+            pending.append(data_a)
+        else:
+            if pending:
+                insertions.setdefault(r_b, []).extend(pending)
+                pending = []
+    trailing_dels = pending  # anything left after the last B row
+
+    # ── Copy newer file to output ─────────────────────────────────────────────
     shutil.copy(path_b, out_path)
     wb = openpyxl.load_workbook(out_path)
     ws = wb["NJN"]
 
-    # ── FIX: openpyxl strips formula cached values when saving, which causes
-    # cells with date-format + formula to display as "31-Dec-99" or "0".
-    # Solution: replace every formula with its pre-computed value so the
-    # output always renders correctly, regardless of viewer. ────────────────
+    # FIX: openpyxl clears formula cached values when saving, making cells
+    # with date-format display as "31-Dec-99". Replace formulas with their
+    # pre-computed data_only values so the output renders correctly everywhere.
     for (r, c), raw_val in raw_b.items():
         cell = ws.cell(r, c)
         if isinstance(cell.value, str) and cell.value.startswith("="):
             cell.value = raw_val
 
-    n_changed = n_added_rows = n_removed_rows = 0
-
-    for r in range(1, max_row_b + 1):
-        has_b = any(vals_b.get((r, c), "") for c in range(1, max_col + 1))
-        has_a = any(vals_a.get((r, c), "") for c in range(1, max_col + 1))
-
-        if not has_b:
-            continue
-
-        if not has_a:
-            n_added_rows += 1
+    # ── Insert deleted rows in-place, bottom→top so row numbers stay valid ────
+    n_removed_rows = sum(len(v) for v in insertions.values()) + len(trailing_dels)
+    for b_rn in sorted(insertions.keys(), reverse=True):
+        data_list = insertions[b_rn]
+        # Insert from last→first so the final order matches data_list[0], [1], ...
+        for a_data in reversed(data_list):
+            try:
+                ws.insert_rows(b_rn)
+            except Exception:
+                pass
+            ws.row_dimensions[b_rn].height = 18
             for c in range(1, max_col + 1):
-                if vals_b.get((r, c), ""):
-                    ws.cell(r, c).fill = FILL_ADDED
-                    ws.cell(r, c).font = FONT_ADDED
+                val = a_data.get(c, "")
+                cell = ws.cell(b_rn, c)
+                cell.value = val or None
+                cell.fill = FILL_REMOVED
+                cell.font = FONT_REMOVED
+
+    # How many rows were inserted at or before a given original B row number
+    def row_offset(r_b):
+        return sum(len(v) for k, v in insertions.items() if k <= r_b)
+
+    # ── Apply highlights (green / orange) with corrected row positions ────────
+    n_changed = n_added_rows = 0
+    for kind, r_b, data_b, data_a in ops:
+        if kind == "deleted":
             continue
+        r_adj = r_b + row_offset(r_b)  # shift down past any insertions above
 
-        for c in range(1, max_col + 1):
-            va = vals_a.get((r, c), "")
-            vb = vals_b.get((r, c), "")
-            if va != vb:
-                n_changed += 1
-                cell = ws.cell(r, c)
-                cell.fill = FILL_CHANGED
-                try:
-                    cell.comment = Comment(
-                        f"PREVIOUS ({label_a}):\n{va if va else '(empty)'}",
-                        "NJN Comparator", height=60, width=180
-                    )
-                except Exception:
-                    pass
+        if kind == "added":
+            n_added_rows += 1
+            for c, vb in data_b.items():
+                if vb:
+                    ws.cell(r_adj, c).fill = FILL_ADDED
+                    ws.cell(r_adj, c).font = FONT_ADDED
 
-    removed_rows = [
-        r for r in range(1, max_row_a + 1)
-        if any(vals_a.get((r, c), "") for c in range(1, max_col + 1))
-        and not any(vals_b.get((r, c), "") for c in range(1, max_col + 1))
-    ]
+        elif kind in ("same", "changed"):
+            for c in range(1, max_col + 1):
+                va = data_a.get(c, "")
+                vb = data_b.get(c, "")
+                if va != vb:
+                    n_changed += 1
+                    cell = ws.cell(r_adj, c)
+                    cell.fill = FILL_CHANGED
+                    try:
+                        cell.comment = Comment(
+                            f"PREVIOUS ({label_a}):\n{va if va else '(empty)'}",
+                            "NJN Comparator", height=60, width=180
+                        )
+                    except Exception:
+                        pass
 
+    # ── Append any trailing deleted rows (after last B row) ───────────────────
     append_at = ws.max_row + 2
-    if removed_rows:
-        n_removed_rows = len(removed_rows)
+    if trailing_dels:
         ws.merge_cells(start_row=append_at, start_column=1,
                        end_row=append_at, end_column=max_col)
         hdr = ws.cell(append_at, 1,
@@ -155,16 +250,16 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
         hdr.alignment = Alignment(horizontal="left", vertical="center")
         ws.row_dimensions[append_at].height = 20
         append_at += 1
-        for src_row in removed_rows:
+        for a_data in trailing_dels:
             ws.row_dimensions[append_at].height = 18
             for c in range(1, max_col + 1):
-                val = vals_a.get((src_row, c), "")
+                val = a_data.get(c, "")
                 cell = ws.cell(append_at, c, val or None)
                 cell.fill = FILL_REMOVED
                 cell.font = FONT_REMOVED
             append_at += 1
 
-    add_legend(ws, append_at, label_a, label_b)
+    add_legend(ws, ws.max_row + 2, label_a, label_b)
     wb.save(out_path)
     return n_changed, n_added_rows, n_removed_rows
 
