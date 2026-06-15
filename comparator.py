@@ -17,12 +17,9 @@ FILL_CHANGED  = PatternFill("solid", fgColor="FFF3B0")  # lemon chiffon
 FILL_ADDED    = PatternFill("solid", fgColor="B5EAD7")  # mint frosting
 FILL_REMOVED  = PatternFill("solid", fgColor="FFAAB5")  # strawberry frosting
 FILL_SYSTEMIC = PatternFill("solid", fgColor="E8D5FF")  # lavender (systemic banner)
-FILL_GHOST    = PatternFill("solid", fgColor="F8F8F8")  # near-white ghost row
-
 FONT_CHANGED  = Font(name="Century Gothic", size=11, color="5C4000")   # dark amber text
 FONT_ADDED    = Font(name="Century Gothic", size=11, bold=True, color="1A5C3C")   # dark mint
 FONT_REMOVED  = Font(name="Century Gothic", size=11, bold=True, color="7B001A", strike=True)
-FONT_GHOST    = Font(name="Century Gothic", size=9,  italic=True, color="999999")
 FONT_STATUS   = Font(name="Century Gothic", size=9,  bold=True,  color="555555")
 
 # Legend fills (slightly more saturated swatches for legibility)
@@ -272,9 +269,8 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                 hi = mid
         return cumulative[lo - 1][1] if lo > 0 else 0
 
-    # ── Apply highlights + inline old/new values ──────────────────────────────
+    # ── Apply highlights with hover comments for old values ──────────────────
     n_changed = n_added_rows = 0
-    ghost_rows: list = []   # (r_adj, col, old_val) to write after main loop
 
     for kind, r_b, data_b, data_a in ops:
         if kind == "deleted" or r_b is None:
@@ -300,43 +296,21 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                 if va != vb:
                     n_changed += 1
                     cell = ws.cell(r_adj, c)
-                    # Systemic columns get a lighter lavender instead of lemon
                     cell.fill = FILL_SYSTEMIC if c in systemic_cols else FILL_CHANGED
                     cell.font = FONT_CHANGED
-                    ghost_rows.append((r_adj, c, va))   # record for ghost row
+                    try:
+                        cell.comment = Comment(
+                            f"PREVIOUS ({label_a}):\n{va or '(empty)'}",
+                            "NJN Comparator", height=60, width=200
+                        )
+                    except Exception:
+                        pass
                     row_has_change = True
             if row_has_change:
                 st = ws.cell(r_adj, max_col + 2, "~ CHG")
                 st.fill = FILL_CHANGED
                 st.font = FONT_STATUS
                 st.alignment = Alignment(horizontal="center", vertical="center")
-
-    # ── Ghost rows: show old values directly below each changed row ───────────
-    # Group ghost_rows by r_adj and insert one ghost row per changed data row
-    from collections import defaultdict
-    ghost_by_row: dict = defaultdict(dict)   # r_adj → {col: old_val}
-    for r_adj, c, va in ghost_rows:
-        ghost_by_row[r_adj][c] = va
-
-    ghost_offset = 0   # cumulative insertions as we process top→bottom
-    for r_adj in sorted(ghost_by_row.keys()):
-        gr = r_adj + ghost_offset + 1   # insert BELOW the changed row
-        try:
-            ws.insert_rows(gr)
-        except Exception:
-            continue
-        ws.row_dimensions[gr].height = 14
-        for c, old_val in ghost_by_row[r_adj].items():
-            cell = ws.cell(gr, c, f"was: {old_val}" if old_val else "was: (empty)")
-            cell.fill = FILL_GHOST
-            cell.font = FONT_GHOST
-            cell.alignment = Alignment(horizontal="left", vertical="center")
-        # Label
-        lbl = ws.cell(gr, max_col + 2, "↑ before")
-        lbl.fill = FILL_GHOST
-        lbl.font = FONT_GHOST
-        lbl.alignment = Alignment(horizontal="center", vertical="center")
-        ghost_offset += 1
 
     # ── Trailing deleted rows ─────────────────────────────────────────────────
     append_at = ws.max_row + 2
