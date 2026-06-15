@@ -38,15 +38,112 @@ def fmt(val):
     return str(val).strip()
 
 
+# ── Fix #1 & #2: robust sheet loading + formula-cache fallback ───────────────
+def _load_worksheet(path, data_only):
+    """Load workbook and return (wb, ws), trying 'NJN' first then active sheet."""
+    wb = openpyxl.load_workbook(path, data_only=data_only)
+    if "NJN" in wb.sheetnames:
+        return wb, wb["NJN"]
+    ws = wb.active
+    if ws is not None:
+        return wb, ws
+    raise ValueError(
+        f"Sheet 'NJN' not found and no active sheet available. "
+        f"Available sheets: {wb.sheetnames}"
+    )
+
+
 def read_values(path):
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb["NJN"]
-    str_vals, raw_vals = {}, {}
-    for row in ws.iter_rows():
-        for cell in row:
-            str_vals[(cell.row, cell.column)] = fmt(cell.value)
-            raw_vals[(cell.row, cell.column)] = cell.value
-    return str_vals, raw_vals, ws.max_row, ws.max_column
+    """
+    Read cell values from the NJN sheet (or active sheet).
+
+    Uses data_only=True to get computed values. When a cell returns None
+    under data_only but the same cell contains a formula in the raw workbook,
+    the raw formula string is used as the display value so it is visible in
+    the diff output.
+
+    Fix #8: wraps everything in try/except and raises a descriptive ValueError.
+    """
+    try:
+        _, ws_data = _load_worksheet(path, data_only=True)
+        _, ws_raw  = _load_worksheet(path, data_only=False)
+
+        str_vals, raw_vals = {}, {}
+        for row in ws_data.iter_rows():
+            for cell in row:
+                key = (cell.row, cell.column)
+                val = cell.value
+
+                # Fix #2: formula cache miss → fall back to raw formula string
+                if val is None:
+                    raw_cell = ws_raw.cell(cell.row, cell.column)
+                    raw_val  = raw_cell.value
+                    if isinstance(raw_val, str) and raw_val.startswith("="):
+                        val = raw_val   # at least the formula is visible
+
+                str_vals[key] = fmt(val)
+                raw_vals[key] = val
+
+        max_row = ws_data.max_row
+        max_col = ws_data.max_column
+        return str_vals, raw_vals, max_row, max_col
+
+    except (ValueError, KeyError):
+        raise   # re-raise our own descriptive errors as-is
+    except Exception as exc:
+        raise ValueError(
+            f"Could not read '{os.path.basename(path)}': {exc}"
+        ) from exc
+
+
+# ── Fix #3: dynamic column detection ─────────────────────────────────────────
+_PART_KEYWORDS   = {"PART", "PART NUMBER", "NUMERO", "NUM", "P/N", "PN"}
+_LEVEL_KEYWORDS  = {"LEVEL", "NIVEL", "LVL"}
+_PARENT_KEYWORDS = {"PARENT", "PADRE", "PARENT PN", "PADRE PN"}
+
+def _detect_columns(vals, max_col, header_end):
+    """
+    Scan header rows (1..header_end) for column labels and return
+    (col_pn, col_level, col_parent).  Falls back to (5, 3, 4) if not found.
+    """
+    col_pn, col_level, col_parent = 5, 3, 4   # hardcoded defaults
+
+    for r in range(1, header_end + 1):
+        for c in range(1, max_col + 1):
+            raw = (vals.get((r, c)) or "").upper().strip()
+            if raw in _PART_KEYWORDS and col_pn == 5:
+                col_pn = c
+            if raw in _LEVEL_KEYWORDS and col_level == 3:
+                col_level = c
+            if raw in _PARENT_KEYWORDS and col_parent == 4:
+                col_parent = c
+
+    return col_pn, col_level, col_parent
+
+
+# ── Fix #4: dynamic header-boundary detection ─────────────────────────────────
+def _detect_header_end(vals, max_row, col_pn, col_level, max_search=15):
+    """
+    Return the last header row index (rows up to and including this index are
+    treated as fixed header rows).  Looks for the first row after row 1 that
+    has a numeric-looking value in col_level OR a non-empty value in col_pn
+    that looks like a part number (digits/alphanumeric, len > 3).
+    Caps search at min(max_search, max_row).
+    """
+    limit = min(max_search, max_row)
+    for r in range(2, limit + 1):
+        level_val = (vals.get((r, col_level)) or "").strip()
+        pn_val    = (vals.get((r, col_pn))    or "").strip()
+
+        # Numeric level value → data row starts here
+        if level_val and re.match(r'^\d+(\.\d+)*$', level_val):
+            return r - 1
+
+        # Part-number-like value (at least 4 alphanum chars, mostly digits)
+        if pn_val and len(pn_val) >= 4 and sum(ch.isdigit() for ch in pn_val) >= 3:
+            return r - 1
+
+    return 8   # safe fallback
 
 
 def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
@@ -102,13 +199,20 @@ def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
         si.alignment = Alignment(horizontal="left", vertical="center")
 
 
-def _row_key(r, data):
-    if r <= 8:
+def _row_key(r, data, col_pn=5, col_level=3, col_parent=4, header_end=8):
+    """
+    Build a stable key for a data row.
+
+    Fix #3: uses detected column positions instead of hardcoded 3/4/5.
+    Fix #4: uses detected header_end instead of hardcoded 8.
+    Fix #6: CONTENT fallback only uses first 3 non-empty values.
+    """
+    if r <= header_end:
         return f"__HDR_{r:03d}"
-    pn = (data.get(5) or "").strip()
+    pn = (data.get(col_pn) or "").strip()
     if pn:
-        level  = (data.get(3) or "").strip()
-        parent = (data.get(4) or "").strip()
+        level  = (data.get(col_level)  or "").strip()
+        parent = (data.get(col_parent) or "").strip()
         # Strip trailing revision letter from parent (e.g. 656475500F → 656475500)
         if len(parent) > 5 and parent[-1].isupper() and parent[-2:].isalnum():
             parent = re.sub(r'[A-Z]$', '', parent)
@@ -116,7 +220,9 @@ def _row_key(r, data):
     label = (data.get(1) or "").strip()
     if label:
         return f"FOOTER|{label}"
-    return "CONTENT|" + "|".join(str(v) for v in data.values() if v)
+    # Fix #6: use only first 3 non-empty values for stability
+    non_empty = [str(v) for v in data.values() if v][:3]
+    return "CONTENT|" + "|".join(non_empty)
 
 
 def compare_and_export(path_a, path_b, out_path, label_a, label_b):
@@ -133,6 +239,15 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
     vals_b, raw_b, max_row_b, max_col_b = read_values(path_b)
     max_col = max(max_col_a, max_col_b)
 
+    # Fix #3 & #4: detect header boundary and column positions from file A
+    # (use A as the reference since it's the older/base revision)
+    # Quick pass: detect header end with default columns first, then refine
+    col_pn_tmp, col_level_tmp, col_parent_tmp = 5, 3, 4
+    header_end = _detect_header_end(vals_a, max_row_a, col_pn_tmp, col_level_tmp)
+    col_pn, col_level, col_parent = _detect_columns(vals_a, max_col_a, header_end)
+    # Re-detect header end now that we have the real column positions
+    header_end = _detect_header_end(vals_a, max_row_a, col_pn, col_level)
+
     def get_rows(vals, max_row):
         out = []
         for r in range(1, max_row + 1):
@@ -144,8 +259,8 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
     rows_a = get_rows(vals_a, max_row_a)
     rows_b = get_rows(vals_b, max_row_b)
 
-    keys_a = [_row_key(r, d) for r, d in rows_a]
-    keys_b = [_row_key(r, d) for r, d in rows_b]
+    keys_a = [_row_key(r, d, col_pn, col_level, col_parent, header_end) for r, d in rows_a]
+    keys_b = [_row_key(r, d, col_pn, col_level, col_parent, header_end) for r, d in rows_b]
 
     # ── difflib alignment ────────────────────────────────────────────────────
     sm  = difflib.SequenceMatcher(None, keys_a, keys_b, autojunk=False)
@@ -161,13 +276,35 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
             for ia in range(i1, i2):
                 ops.append(("deleted", None,           None,          rows_a[ia][1]))
         elif tag == "replace":
-            pairs = min(i2 - i1, j2 - j1)
-            for k in range(pairs):
-                ops.append(("changed", rows_b[j1+k][0], rows_b[j1+k][1], rows_a[i1+k][1]))
-            for ia in range(i1 + pairs, i2):
-                ops.append(("deleted", None, None, rows_a[ia][1]))
-            for ib in range(j1 + pairs, j2):
-                ops.append(("added",   rows_b[ib][0], rows_b[ib][1], None))
+            # Fix #5: secondary SequenceMatcher for better inner-block alignment
+            sub_a = [rows_a[ia] for ia in range(i1, i2)]
+            sub_b = [rows_b[ib] for ib in range(j1, j2)]
+
+            def _row_content_str(data):
+                return " | ".join(str(v) for v in data.values() if v)
+
+            keys_sub_a = [_row_content_str(d) for _, d in sub_a]
+            keys_sub_b = [_row_content_str(d) for _, d in sub_b]
+
+            inner_sm  = difflib.SequenceMatcher(None, keys_sub_a, keys_sub_b, autojunk=False)
+            for itag, ii1, ii2, ij1, ij2 in inner_sm.get_opcodes():
+                if itag == "equal":
+                    for ka, kb in zip(range(ii1, ii2), range(ij1, ij2)):
+                        ops.append(("same",    sub_b[kb][0], sub_b[kb][1], sub_a[ka][1]))
+                elif itag == "insert":
+                    for kb in range(ij1, ij2):
+                        ops.append(("added",   sub_b[kb][0], sub_b[kb][1], None))
+                elif itag == "delete":
+                    for ka in range(ii1, ii2):
+                        ops.append(("deleted", None,          None,         sub_a[ka][1]))
+                elif itag == "replace":
+                    pairs = min(ii2 - ii1, ij2 - ij1)
+                    for k in range(pairs):
+                        ops.append(("changed", sub_b[ij1+k][0], sub_b[ij1+k][1], sub_a[ii1+k][1]))
+                    for ka in range(ii1 + pairs, ii2):
+                        ops.append(("deleted", None, None, sub_a[ka][1]))
+                    for kb in range(ij1 + pairs, ij2):
+                        ops.append(("added",   sub_b[kb][0], sub_b[kb][1], None))
 
     # ── Systemic change detection ────────────────────────────────────────────
     # A column is "systemic" if it differs in ≥80% of matched row pairs AND
@@ -197,8 +334,18 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
 
     # ── Copy newer file ───────────────────────────────────────────────────────
     shutil.copy(path_b, out_path)
-    wb = openpyxl.load_workbook(out_path)
-    ws = wb["NJN"]
+    wb_out = openpyxl.load_workbook(out_path)
+
+    # Fix #1: robust sheet selection for output workbook
+    if "NJN" in wb_out.sheetnames:
+        ws = wb_out["NJN"]
+    elif wb_out.active is not None:
+        ws = wb_out.active
+    else:
+        raise ValueError(
+            f"Sheet 'NJN' not found in output workbook. "
+            f"Available sheets: {wb_out.sheetnames}"
+        )
 
     # Replace formula cells with their computed values (prevents "31-Dec-99" bug)
     for (r, c), raw_val in raw_b.items():
@@ -206,9 +353,10 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
         if isinstance(cell.value, str) and cell.value.startswith("="):
             cell.value = raw_val
 
-    # ── Insert systemic-change banner row just below column-header row (row 8) ─
+    # ── Insert systemic-change banner row just below column-header row ────────
+    # Use detected header_end instead of hardcoded 8
     if systemic_cols:
-        banner_row = 9
+        banner_row = header_end + 1
         ws.insert_rows(banner_row)
         ws.row_dimensions[banner_row].height = 22
         desc = "  SYSTEMIC CHANGES (affect most rows):  " + "    ·    ".join(
@@ -288,6 +436,7 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                     cell = ws.cell(r_adj, c)
                     cell.fill = FILL_SYSTEMIC if c in systemic_cols else FILL_CHANGED
                     cell.font = FONT_CHANGED
+                    # Fix #7: systemic cells still get hover comments (correct behavior)
                     try:
                         cell.comment = Comment(
                             f"PREVIOUS ({label_a}):\n{va or '(empty)'}\n\n— {AUTHOR}",
@@ -320,7 +469,7 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
 
     systemic_info = [(c, old, new) for c, (old, new) in systemic_cols.items()]
     add_legend(ws, ws.max_row + 2, label_a, label_b, max_col, systemic_info)
-    wb.save(out_path)
+    wb_out.save(out_path)
     return n_changed, n_added_rows, n_removed_rows
 
 
