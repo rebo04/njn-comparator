@@ -11,23 +11,20 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.comments import Comment
 
 # ── Cake / Pastel Color Palette ───────────────────────────────────────────────
-#  Light, airy fills — dark text stays readable on every background
-
 FILL_CHANGED  = PatternFill("solid", fgColor="FFF3B0")  # lemon chiffon
-FILL_ADDED    = PatternFill("solid", fgColor="B5EAD7")  # mint frosting
-FILL_REMOVED  = PatternFill("solid", fgColor="FFAAB5")  # strawberry frosting
-FILL_SYSTEMIC = PatternFill("solid", fgColor="E8D5FF")  # lavender (systemic banner)
-FONT_CHANGED  = Font(name="Century Gothic", size=11, color="5C4000")   # dark amber text
-FONT_ADDED    = Font(name="Century Gothic", size=11, bold=True, color="1A5C3C")   # dark mint
-FONT_REMOVED  = Font(name="Century Gothic", size=11, bold=True, color="7B001A", strike=True)
-FONT_STATUS   = Font(name="Century Gothic", size=9,  bold=True,  color="555555")
+FILL_ADDED    = PatternFill("solid", fgColor="B5EAD7")  # mint
+FILL_REMOVED  = PatternFill("solid", fgColor="FFAAB5")  # strawberry
+FILL_SYSTEMIC = PatternFill("solid", fgColor="D6EAF8")  # light sky blue — systemic banner
 
-# Legend fills (slightly more saturated swatches for legibility)
-FILL_LEGEND_TITLE = PatternFill("solid", fgColor="9B59B6")  # pastel purple
+FONT_CHANGED  = Font(name="Century Gothic", size=11, color="5C4000")
+FONT_ADDED    = Font(name="Century Gothic", size=11, bold=True, color="1A5C3C")
+FONT_REMOVED  = Font(name="Century Gothic", size=11, bold=True, color="7B001A", strike=True)
+
+FILL_LEGEND_TITLE = PatternFill("solid", fgColor="2E4057")  # dark navy
 FILL_LEGEND_CHG   = PatternFill("solid", fgColor="FFF3B0")
 FILL_LEGEND_ADD   = PatternFill("solid", fgColor="B5EAD7")
 FILL_LEGEND_DEL   = PatternFill("solid", fgColor="FFAAB5")
-FILL_LEGEND_SYS   = PatternFill("solid", fgColor="E8D5FF")
+FILL_LEGEND_SYS   = PatternFill("solid", fgColor="D6EAF8")
 FILL_LEGEND_SAME  = PatternFill("solid", fgColor="F5F5F7")
 
 
@@ -51,7 +48,7 @@ def read_values(path):
 
 
 def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
-    end_col = max_col + 3
+    end_col = max_col + 1
     r = start_row + 2
 
     # Title
@@ -66,18 +63,18 @@ def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
     # Timestamp
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=end_col)
     s = ws.cell(r, 1, f"  NJN Comparator  ·  {datetime.now().strftime('%Y-%m-%d  %H:%M')}")
-    s.fill = PatternFill("solid", fgColor="D7BDE2")
-    s.font = Font(name="Century Gothic", size=9, color="4A235A")
+    s.fill = PatternFill("solid", fgColor="3D5A73")
+    s.font = Font(name="Century Gothic", size=9, color="FFFFFF")
     s.alignment = Alignment(horizontal="left", vertical="center")
     ws.row_dimensions[r].height = 16
     r += 1
 
     items = [
-        (FILL_LEGEND_CHG,  "🍋  CHANGED",   "Cell modified — new value shown, old value below in gray"),
-        (FILL_LEGEND_ADD,  "🌿  ADDED",     "Row is new in this revision"),
-        (FILL_LEGEND_DEL,  "🍓  DELETED",   "Row removed — shown in its original position with strikethrough"),
-        (FILL_LEGEND_SYS,  "🔮  SYSTEMIC",  "Column changed in ≥80% of rows (see banner above data)"),
-        (FILL_LEGEND_SAME, "   UNCHANGED",  "No difference"),
+        (FILL_LEGEND_CHG,  "CHANGED",   "Cell value was modified — hover to see the previous value"),
+        (FILL_LEGEND_ADD,  "ADDED",     "Row is new in this revision"),
+        (FILL_LEGEND_DEL,  "DELETED",   "Row was removed — shown in its original position"),
+        (FILL_LEGEND_SYS,  "SYSTEMIC",  "Column changed across most rows — see blue banner above the data"),
+        (FILL_LEGEND_SAME, "UNCHANGED", "No difference"),
     ]
     for fill, lbl, desc in items:
         ws.row_dimensions[r].height = 22
@@ -99,7 +96,7 @@ def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
             f"Col {c}: '{old}' → '{new}'" for c, old, new in systemic_info
         ))
         si.fill = FILL_SYSTEMIC
-        si.font = Font(name="Century Gothic", size=9, italic=True, color="4A235A")
+        si.font = Font(name="Century Gothic", size=9, italic=True, color="FFFFFF")
         si.alignment = Alignment(horizontal="left", vertical="center")
 
 
@@ -220,7 +217,7 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                        end_row=banner_row, end_column=max_col + 3)
         bc = ws.cell(banner_row, 1, desc)
         bc.fill = FILL_SYSTEMIC
-        bc.font = Font(name="Century Gothic", size=10, bold=True, color="4A235A")
+        bc.font = Font(name="Century Gothic", size=10, bold=True, color="FFFFFF")
         bc.alignment = Alignment(horizontal="left", vertical="center")
         # shift all original B row numbers down by 1
         ops = [
@@ -247,10 +244,6 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                 cell.value = val or None
                 cell.fill = FILL_REMOVED
                 cell.font = FONT_REMOVED
-            st = ws.cell(b_rn, max_col + 2, "◄ DEL")
-            st.fill = FILL_REMOVED
-            st.font = FONT_STATUS
-            st.alignment = Alignment(horizontal="center", vertical="center")
 
     # ── Pre-compute row offset (O(log n) lookup) ──────────────────────────────
     sorted_ins = sorted(insertions.items())
@@ -283,13 +276,8 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                 if vb:
                     ws.cell(r_adj, c).fill = FILL_ADDED
                     ws.cell(r_adj, c).font = FONT_ADDED
-            st = ws.cell(r_adj, max_col + 2, "▲ ADD")
-            st.fill = FILL_ADDED
-            st.font = FONT_STATUS
-            st.alignment = Alignment(horizontal="center", vertical="center")
 
         elif kind in ("same", "changed"):
-            row_has_change = False
             for c in range(1, max_col + 1):
                 va = data_a.get(c, "")
                 vb = data_b.get(c, "")
@@ -305,12 +293,6 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                         )
                     except Exception:
                         pass
-                    row_has_change = True
-            if row_has_change:
-                st = ws.cell(r_adj, max_col + 2, "~ CHG")
-                st.fill = FILL_CHANGED
-                st.font = FONT_STATUS
-                st.alignment = Alignment(horizontal="center", vertical="center")
 
     # ── Trailing deleted rows ─────────────────────────────────────────────────
     append_at = ws.max_row + 2
@@ -332,10 +314,6 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                 cell = ws.cell(append_at, c, val or None)
                 cell.fill = FILL_REMOVED
                 cell.font = FONT_REMOVED
-            st = ws.cell(append_at, max_col + 2, "◄ DEL")
-            st.fill = FILL_REMOVED
-            st.font = FONT_STATUS
-            st.alignment = Alignment(horizontal="center", vertical="center")
             append_at += 1
 
     systemic_info = [(c, old, new) for c, (old, new) in systemic_cols.items()]
