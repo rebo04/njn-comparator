@@ -15,6 +15,7 @@ FILL_CHANGED  = PatternFill("solid", fgColor="FFF3B0")  # lemon chiffon
 FILL_ADDED    = PatternFill("solid", fgColor="B5EAD7")  # mint
 FILL_REMOVED  = PatternFill("solid", fgColor="FFAAB5")  # strawberry
 FILL_SYSTEMIC = PatternFill("solid", fgColor="D6EAF8")  # light sky blue — systemic banner
+FILL_RENAME   = PatternFill("solid", fgColor="E5D4F0")  # light lavender — global value-rename
 
 FONT_CHANGED  = Font(name="Century Gothic", size=11, color="5C4000")
 FONT_ADDED    = Font(name="Century Gothic", size=11, bold=True, color="1A5C3C")
@@ -27,6 +28,7 @@ FILL_LEGEND_CHG   = PatternFill("solid", fgColor="FFF3B0")
 FILL_LEGEND_ADD   = PatternFill("solid", fgColor="B5EAD7")
 FILL_LEGEND_DEL   = PatternFill("solid", fgColor="FFAAB5")
 FILL_LEGEND_SYS   = PatternFill("solid", fgColor="D6EAF8")
+FILL_LEGEND_RENAME = PatternFill("solid", fgColor="E5D4F0")
 FILL_LEGEND_SAME  = PatternFill("solid", fgColor="F5F5F7")
 
 
@@ -148,7 +150,7 @@ def _detect_header_end(vals, max_row, col_pn, col_level, max_search=15):
     return 8   # safe fallback
 
 
-def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
+def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info, rename_info=None):
     end_col = max_col + 1
     r = start_row + 2
 
@@ -171,11 +173,12 @@ def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
     r += 1
 
     items = [
-        (FILL_LEGEND_CHG,  "CHANGED",   "Cell value was modified — hover to see the previous value"),
-        (FILL_LEGEND_ADD,  "ADDED",     "Row is new in this revision"),
-        (FILL_LEGEND_DEL,  "DELETED",   "Row was removed — shown in its original position"),
-        (FILL_LEGEND_SYS,  "SYSTEMIC",  "Column changed across most rows — see blue banner above the data"),
-        (FILL_LEGEND_SAME, "UNCHANGED", "No difference"),
+        (FILL_LEGEND_CHG,    "CHANGED",   "Cell value was modified — hover to see the previous value"),
+        (FILL_LEGEND_ADD,    "ADDED",     "Row is new in this revision"),
+        (FILL_LEGEND_DEL,    "DELETED",   "Row was removed — shown in its original position"),
+        (FILL_LEGEND_SYS,    "SYSTEMIC",  "Column changed across most rows — see blue banner above the data"),
+        (FILL_LEGEND_RENAME, "RENAMED",   "Same value substitution repeated across many rows — counted once, see purple banner above the data"),
+        (FILL_LEGEND_SAME,   "UNCHANGED", "No difference"),
     ]
     for fill, lbl, desc in items:
         ws.row_dimensions[r].height = 22
@@ -199,6 +202,39 @@ def add_legend(ws, start_row, label_a, label_b, max_col, systemic_info):
         si.fill = FILL_SYSTEMIC
         si.font = Font(name="Century Gothic", size=9, italic=True, color="FFFFFF")
         si.alignment = Alignment(horizontal="left", vertical="center")
+        r += 1
+
+    if rename_info:
+        ws.row_dimensions[r].height = 16
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=end_col)
+        ri = ws.cell(r, 1, "  Global value renames: " + "  |  ".join(
+            f"'{old}' → '{new}' ({cnt} occurrences)" for old, new, cnt in rename_info
+        ))
+        ri.fill = FILL_RENAME
+        ri.font = Font(name="Century Gothic", size=9, italic=True, color="333333")
+        ri.alignment = Alignment(horizontal="left", vertical="center")
+
+
+def _strip_revision_suffix(s):
+    """
+    Strip a trailing single-letter revision suffix from a part number, so that
+    e.g. "656475500F" and "656475500G" (or "690BKTP-C" and "690BKTP-B") are
+    recognized as the same underlying part at different revisions.
+
+    Two patterns are recognized:
+      1. Hyphen-separated suffix:  "690BKTP-C"   -> "690BKTP"
+      2. Bare trailing letter:     "656475500F"  -> "656475500"
+    Only fires on strings long enough that the stripped remainder is still a
+    meaningful identifier (avoids mangling short codes).
+    """
+    if not s:
+        return s
+    m = re.match(r'^(.+)-[A-Za-z]$', s)
+    if m and len(m.group(1)) >= 4:
+        return m.group(1)
+    if len(s) > 5 and s[-1].isupper() and s[-2:].isalnum():
+        return s[:-1]
+    return s
 
 
 def _row_key(r, data, col_pn=5, col_level=3, col_parent=4, header_end=8):
@@ -208,6 +244,9 @@ def _row_key(r, data, col_pn=5, col_level=3, col_parent=4, header_end=8):
     Fix #3: uses detected column positions instead of hardcoded 3/4/5.
     Fix #4: uses detected header_end instead of hardcoded 8.
     Fix #6: CONTENT fallback only uses first 3 non-empty values.
+    Fix #9: strip trailing revision letter from BOTH parent and the row's own
+            part number, so a part whose only change is its own revision
+            suffix still aligns as "changed" instead of delete+insert.
     """
     if r <= header_end:
         return f"__HDR_{r:03d}"
@@ -215,10 +254,9 @@ def _row_key(r, data, col_pn=5, col_level=3, col_parent=4, header_end=8):
     if pn:
         level  = (data.get(col_level)  or "").strip()
         parent = (data.get(col_parent) or "").strip()
-        # Strip trailing revision letter from parent (e.g. 656475500F → 656475500)
-        if len(parent) > 5 and parent[-1].isupper() and parent[-2:].isalnum():
-            parent = re.sub(r'[A-Z]$', '', parent)
-        return f"PART|{level}|{parent}|{pn}"
+        parent = _strip_revision_suffix(parent)
+        pn_key = _strip_revision_suffix(pn)
+        return f"PART|{level}|{parent}|{pn_key}"
     label = (data.get(1) or "").strip()
     if label:
         return f"FOOTER|{label}"
@@ -233,9 +271,17 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
       - Lemon yellow cell  : value changed (old value shown in ghost row below)
       - Mint green row     : row added in path_b
       - Pink row           : row deleted from path_a, shown in-place
-      - Lavender banner    : column that changed in ≥80% of rows (systemic)
+      - Sky-blue banner    : column that changed in ≥80% of rows (systemic)
+      - Lavender cell/banner: the same (old_value, new_value) pair recurring
+                              ≥5 times anywhere in the sheet (global rename,
+                              e.g. a revision-letter bump propagating into
+                              every row that references that part). Each
+                              affected cell is still highlighted, but the
+                              whole group counts as 1 toward n_changed.
 
-    Returns (n_changed_cells, n_added_rows, n_removed_rows).
+    Returns (n_changed_cells, n_added_rows, n_removed_rows), where
+    n_changed_cells already collapses global-rename groups to 1 each so the
+    headline number reflects distinct signal rather than mechanical repeats.
     """
     vals_a, _,     max_row_a, max_col_a = read_values(path_a)
     vals_b, raw_b, max_row_b, max_col_b = read_values(path_b)
@@ -323,6 +369,30 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                 new_s = next((p[1] for p in diffs if p[1]), "")
                 systemic_cols[c] = (old_s, new_s)
 
+    # ── Global value-substitution detection ──────────────────────────────────
+    # The column-based systemic detector above only fires when ONE column
+    # changes in ≥80% of ALL rows. Real PPAP BOMs often have a column (e.g.
+    # "parent part number") that holds many *different* values, so a single
+    # value being renamed everywhere it occurs (e.g. a revision-letter bump
+    # propagating into every row that references it) never reaches that
+    # global 80% threshold — yet it's still conceptually ONE rename, just
+    # repeated mechanically. Detect that here by grouping every per-cell
+    # diff (across ALL rows/columns, not just systemic-column rows) by the
+    # literal (old_value, new_value) pair. A pair recurring often enough is
+    # treated as a single global rename: highlighted everywhere it appears,
+    # but counted once in the headline number instead of once per occurrence.
+    GLOBAL_RENAME_MIN_OCCURRENCES = 5
+    rename_counts: dict = {}        # (old, new) -> occurrence count
+    for da, db in matched:
+        for c in range(1, max_col + 1):
+            va, vb = da.get(c, ""), db.get(c, "")
+            if va != vb and va and vb:
+                rename_counts[(va, vb)] = rename_counts.get((va, vb), 0) + 1
+    global_renames = {
+        pair: cnt for pair, cnt in rename_counts.items()
+        if cnt >= GLOBAL_RENAME_MIN_OCCURRENCES
+    }
+
     # ── Build insertion map (deleted rows → before which B row) ──────────────
     insertions: dict = {}
     pending:    list = []
@@ -355,29 +425,50 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
         if isinstance(cell.value, str) and cell.value.startswith("="):
             cell.value = raw_val
 
-    # ── Insert systemic-change banner row just below column-header row ────────
+    # ── Insert systemic/rename banner row(s) just below column-header row ─────
     # Use detected header_end instead of hardcoded 8
-    if systemic_cols:
+    banner_rows_needed = (1 if systemic_cols else 0) + (1 if global_renames else 0)
+    if banner_rows_needed:
         banner_row = header_end + 1
-        ws.insert_rows(banner_row)
-        ws.row_dimensions[banner_row].height = 22
-        desc = "  SYSTEMIC CHANGES (affect most rows):  " + "    ·    ".join(
-            f"Col {c}  '{old}' → '{new}'"
-            for c, (old, new) in systemic_cols.items()
-        )
-        ws.merge_cells(start_row=banner_row, start_column=1,
-                       end_row=banner_row, end_column=max_col + 3)
-        bc = ws.cell(banner_row, 1, desc)
-        bc.fill = FILL_SYSTEMIC
-        bc.font = Font(name="Century Gothic", size=10, bold=True, color="FFFFFF")
-        bc.alignment = Alignment(horizontal="left", vertical="center")
-        # shift all original B row numbers down by 1
+        for _ in range(banner_rows_needed):
+            ws.insert_rows(banner_row)
+
+        cur_row = banner_row
+        if systemic_cols:
+            ws.row_dimensions[cur_row].height = 22
+            desc = "  SYSTEMIC CHANGES (affect most rows):  " + "    ·    ".join(
+                f"Col {c}  '{old}' → '{new}'"
+                for c, (old, new) in systemic_cols.items()
+            )
+            ws.merge_cells(start_row=cur_row, start_column=1,
+                           end_row=cur_row, end_column=max_col + 3)
+            bc = ws.cell(cur_row, 1, desc)
+            bc.fill = FILL_SYSTEMIC
+            bc.font = Font(name="Century Gothic", size=10, bold=True, color="FFFFFF")
+            bc.alignment = Alignment(horizontal="left", vertical="center")
+            cur_row += 1
+
+        if global_renames:
+            ws.row_dimensions[cur_row].height = 22
+            desc = "  GLOBAL RENAMES (same value substitution repeated, counted once):  " + "    ·    ".join(
+                f"'{old}' → '{new}'  ({cnt}x)"
+                for (old, new), cnt in global_renames.items()
+            )
+            ws.merge_cells(start_row=cur_row, start_column=1,
+                           end_row=cur_row, end_column=max_col + 3)
+            rc = ws.cell(cur_row, 1, desc)
+            rc.fill = FILL_RENAME
+            rc.font = Font(name="Century Gothic", size=10, bold=True, color="333333")
+            rc.alignment = Alignment(horizontal="left", vertical="center")
+            cur_row += 1
+
+        # shift all original B row numbers down by however many banner rows we inserted
         ops = [
-            (kind, (r_b + 1) if r_b and r_b >= banner_row else r_b, db, da)
+            (kind, (r_b + banner_rows_needed) if r_b and r_b >= banner_row else r_b, db, da)
             for kind, r_b, db, da in ops
         ]
         insertions = {
-            (k + 1 if k >= banner_row else k): v
+            (k + banner_rows_needed if k >= banner_row else k): v
             for k, v in insertions.items()
         }
 
@@ -416,6 +507,7 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
 
     # ── Apply highlights with hover comments for old values ──────────────────
     n_changed = n_added_rows = 0
+    renames_seen: set = set()   # (old, new) pairs already counted toward n_changed
 
     for kind, r_b, data_b, data_a in ops:
         if kind == "deleted" or r_b is None:
@@ -434,11 +526,25 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
                 va = data_a.get(c, "")
                 vb = data_b.get(c, "")
                 if va != vb:
-                    n_changed += 1
+                    pair = (va, vb)
+                    is_global_rename = pair in global_renames
+                    if is_global_rename:
+                        # Count the whole substitution group as 1 occurrence
+                        # toward the headline number, not once per cell.
+                        if pair not in renames_seen:
+                            renames_seen.add(pair)
+                            n_changed += 1
+                    else:
+                        n_changed += 1
                     cell = ws.cell(r_adj, c)
-                    cell.fill = FILL_SYSTEMIC if c in systemic_cols else FILL_CHANGED
+                    if is_global_rename:
+                        cell.fill = FILL_RENAME
+                    elif c in systemic_cols:
+                        cell.fill = FILL_SYSTEMIC
+                    else:
+                        cell.fill = FILL_CHANGED
                     cell.font = FONT_CHANGED
-                    # Fix #7: systemic cells still get hover comments (correct behavior)
+                    # Fix #7: systemic/renamed cells still get hover comments
                     try:
                         prev_display = "(formula — value not cached)" if (isinstance(va, str) and va.startswith("=")) else (va or "(empty)")
                         cell.comment = Comment(
@@ -471,7 +577,8 @@ def compare_and_export(path_a, path_b, out_path, label_a, label_b):
             append_at += 1
 
     systemic_info = [(c, old, new) for c, (old, new) in systemic_cols.items()]
-    add_legend(ws, ws.max_row + 2, label_a, label_b, max_col, systemic_info)
+    rename_info = [(old, new, cnt) for (old, new), cnt in global_renames.items()]
+    add_legend(ws, ws.max_row + 2, label_a, label_b, max_col, systemic_info, rename_info)
     wb_out.save(out_path)
     return n_changed, n_added_rows, n_removed_rows
 
