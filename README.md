@@ -1,5 +1,7 @@
 # NJN Comparator
 
+**Created by Arturo Rebolledo**
+
 Compares PPAP NJN Excel documents revision by revision and highlights every change directly inside the document — same format as the original. Add 2 or more revision files and it compares every pair, color-codes every cell/row that changed, and collapses repetitive part-revision renames into a single flagged change instead of dozens of duplicate diffs.
 
 ---
