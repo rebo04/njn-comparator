@@ -64,6 +64,19 @@ A legend explaining each color is also added at the bottom of every generated re
 
 ---
 
+## Security & privacy
+
+NJN Comparator works **100% offline** — it never touches the network, so it's safe to run on confidential PPAP/BOM documents.
+
+- **No network code at all.** Neither `app.py` nor `comparator.py` imports `requests`, `urllib`, `socket`, or any other networking module — there is nothing in the source that *could* phone home, even by accident.
+- **No telemetry, no analytics, no auto-update check.** The app doesn't call out anywhere, ever.
+- **Local-only file I/O.** It only reads the `.xlsx` files you pick and writes the comparison report next to them (or to the output folder you choose), using `openpyxl`. Your documents never leave your machine.
+- **Verify it yourself** — the entire source is in this repo (`app.py` + `comparator.py`); a quick read or a `grep -i "requests\|urllib\|socket\|http"` over both files will show zero matches.
+
+The only outbound connection in this whole *project* is GitHub's own infrastructure building the `.exe`/`.app` releases via Actions when a new version is tagged — the app itself, once downloaded, runs fully local.
+
+---
+
 ## Requirements (if running from source)
 
 - Python 3.9+
