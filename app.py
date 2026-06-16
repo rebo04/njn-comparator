@@ -29,9 +29,9 @@ class FileRow(ctk.CTkFrame):
 
         name = os.path.basename(path)
         ctk.CTkLabel(
-            self, text=f"📄  {name}", anchor="w",
+            self, text=f"📄  {name}", anchor="center", justify="center",
             font=ctk.CTkFont(size=12), wraplength=500
-        ).grid(row=0, column=0, sticky="w", padx=(6, 0))
+        ).grid(row=0, column=0, sticky="ew", padx=(6, 0))
 
         ctk.CTkButton(
             self, text="✕", width=28, height=26,
@@ -61,27 +61,26 @@ class NJNComparatorApp(ctk.CTk):
         self.columnconfigure(0, weight=1)
 
         # ── Header bar ──────────────────────────────────────────────────────
-        bar = ctk.CTkFrame(self, corner_radius=0, height=64,
+        bar = ctk.CTkFrame(self, corner_radius=0, height=70,
                            fg_color=("#1A1A2E", "#1A1A2E"))
         bar.grid(row=0, column=0, sticky="ew")
         bar.grid_propagate(False)
-        bar.columnconfigure(1, weight=1)
+        bar.columnconfigure(0, weight=1)
+        bar.rowconfigure(0, weight=1)
+        bar.rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
             bar, text="NJN COMPARATOR",
             font=ctk.CTkFont(size=22, weight="bold"),
-            text_color="#FFFFFF"
-        ).grid(row=0, column=0, padx=20, pady=10, sticky="w")
+            text_color="#FFFFFF", anchor="center", justify="center"
+        ).grid(row=0, column=0, padx=20, pady=(10, 0), sticky="ew")
 
         ctk.CTkLabel(
-            bar, text="Compare PPAP NJN documents and highlight every change",
-            font=ctk.CTkFont(size=11), text_color="#8899BB"
-        ).grid(row=0, column=1, padx=4, sticky="w")
-
-        ctk.CTkLabel(
-            bar, text="Arturo Rebolledo",
-            font=ctk.CTkFont(size=11, weight="bold"), text_color="#AACCFF"
-        ).grid(row=0, column=2, padx=20, pady=10, sticky="e")
+            bar,
+            text="Compare PPAP NJN documents and highlight every change   ·   Arturo Rebolledo",
+            font=ctk.CTkFont(size=11), text_color="#8899BB",
+            anchor="center", justify="center"
+        ).grid(row=1, column=0, padx=4, pady=(0, 10), sticky="ew")
 
         # ── Scrollable body ──────────────────────────────────────────────────
         body = ctk.CTkScrollableFrame(self, corner_radius=0)
@@ -100,13 +99,14 @@ class NJNComparatorApp(ctk.CTk):
         ctk.CTkLabel(
             files_header,
             text="Add 2 or more NJN revision files — the app compares every pair.",
-            font=ctk.CTkFont(size=11), text_color=("gray40", "gray60")
-        ).grid(row=0, column=0, sticky="w")
+            font=ctk.CTkFont(size=11), text_color=("gray40", "gray60"),
+            anchor="center", justify="center"
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         ctk.CTkButton(
             files_header, text="+ Add Files", width=120,
             command=self._add_files
-        ).grid(row=0, column=1)
+        ).grid(row=1, column=0)
 
         # File list card
         self._file_card = ctk.CTkFrame(body, corner_radius=10,
@@ -117,7 +117,8 @@ class NJNComparatorApp(ctk.CTk):
         self._empty_label = ctk.CTkLabel(
             self._file_card,
             text="No files added yet.\nClick  '+ Add Files'  to browse for .xlsx files.",
-            font=ctk.CTkFont(size=12), text_color=("gray50", "gray55")
+            font=ctk.CTkFont(size=12), text_color=("gray50", "gray55"),
+            anchor="center", justify="center"
         )
         self._empty_label.grid(row=0, column=0, pady=28)
 
@@ -128,7 +129,7 @@ class NJNComparatorApp(ctk.CTk):
         out_row.grid(row=4, column=0, sticky="ew", **pad, pady=(0, 20))
         out_row.columnconfigure(0, weight=1)
 
-        ctk.CTkEntry(out_row, textvariable=self._out_dir,
+        ctk.CTkEntry(out_row, textvariable=self._out_dir, justify="center",
                      font=ctk.CTkFont(size=12)).grid(row=0, column=0, sticky="ew",
                                                       padx=(0, 10))
         ctk.CTkButton(out_row, text="Browse…", width=100,
@@ -163,6 +164,7 @@ class NJNComparatorApp(ctk.CTk):
             fg_color="transparent"
         )
         self._log_box.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        self._log_box.tag_config("center", justify="center")
 
         # ── Open folder button ───────────────────────────────────────────────
         self._open_btn = ctk.CTkButton(
@@ -179,12 +181,15 @@ class NJNComparatorApp(ctk.CTk):
     def _section_label(self, parent, row, text):
         f = ctk.CTkFrame(parent, fg_color="transparent", height=32)
         f.grid(row=row, column=0, sticky="ew", padx=20, pady=(14, 2))
-        f.columnconfigure(1, weight=1)
+        f.columnconfigure(0, weight=1)
+        f.columnconfigure(2, weight=1)
+        sep_l = ctk.CTkFrame(f, height=2, fg_color=("gray80", "gray30"))
+        sep_l.grid(row=0, column=0, sticky="ew", padx=(0, 10), pady=8)
         ctk.CTkLabel(f, text=text,
-                     font=ctk.CTkFont(size=14, weight="bold")).grid(
-            row=0, column=0, sticky="w")
-        sep = ctk.CTkFrame(f, height=2, fg_color=("gray80", "gray30"))
-        sep.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=8)
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     anchor="center", justify="center").grid(row=0, column=1)
+        sep_r = ctk.CTkFrame(f, height=2, fg_color=("gray80", "gray30"))
+        sep_r.grid(row=0, column=2, sticky="ew", padx=(10, 0), pady=8)
 
     def _add_files(self):
         paths = filedialog.askopenfilenames(
@@ -233,7 +238,9 @@ class NJNComparatorApp(ctk.CTk):
 
     def _log(self, text):
         self._log_box.configure(state="normal")
+        start = self._log_box.index("end-1c")
         self._log_box.insert("end", text + "\n")
+        self._log_box.tag_add("center", start, "end")
         self._log_box.configure(state="disabled")
         self._log_box.see("end")
 
